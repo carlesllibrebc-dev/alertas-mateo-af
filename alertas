@@ -10,8 +10,8 @@ import pytz
 # ==============================
 # CONFIGURACIÓN
 # ==============================
-TELEGRAM_TOKEN = "TU_API_TOKEN_TELEGRAM"
-CHAT_ID = "TU_CHAT_ID"
+TELEGRAM_TOKEN = "8007309562:AAHoY6yJgFNbr0-KAjtlcx911H-xauejlVUE"
+CHAT_ID = "MATEOAF_BOT"
 
 # Archivo JSON editable con tu cartera
 PORTFOLIO_FILE = "portfolio.json"
