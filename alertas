@@ -1,36 +1,31 @@
 import requests
 import pandas as pd
-import ta
+import ta  # pip install ta
 import schedule
 import time
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 
 # ==============================
 # CONFIGURACIÓN
 # ==============================
 TELEGRAM_TOKEN = "8007309562:AAHoY6yJgFNbr0-KAjtlcx911H-xauejlVUE"
-CHAT_ID = "MATEOAF_BOT"
+CHAT_ID = "@MATEOAF_BOT"
 
-# Archivo JSON editable con tu cartera
-PORTFOLIO_FILE = "portfolio.json"
-
-# ==============================
-# FUNCIONES DE CARTERA
-# ==============================
-def load_portfolio():
-    with open(PORTFOLIO_FILE, "r") as f:
-        return json.load(f)
-
-def save_portfolio(data):
-    with open(PORTFOLIO_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+# Monedas que quieres trackear
+SYMBOLS = {
+    "bitcoin": "BTC",
+    "ethereum": "ETH",
+    "cardano": "ADA",
+    "solana": "SOL"
+}
 
 # ==============================
-# API & INDICADORES
+# FUNCIONES
 # ==============================
-def get_price_history(symbol_id, days=7, vs_currency="eur"):
+
+def get_price_history(symbol_id, days=5, vs_currency="eur"):
+    """Descarga precios históricos (5 días) de CoinGecko."""
     url = f"https://api.coingecko.com/api/v3/coins/{symbol_id}/market_chart"
     params = {"vs_currency": vs_currency, "days": days, "interval": "hourly"}
     r = requests.get(url, params=params)
@@ -41,6 +36,7 @@ def get_price_history(symbol_id, days=7, vs_currency="eur"):
     return df
 
 def calc_indicators(df):
+    """Calcula RSI, MACD, SMA, EMA sobre el DataFrame."""
     df["SMA20"] = df["price"].rolling(window=20).mean()
     df["SMA50"] = df["price"].rolling(window=50).mean()
     df["EMA20"] = df["price"].ewm(span=20, adjust=False).mean()
@@ -52,6 +48,7 @@ def calc_indicators(df):
     return df
 
 def get_fear_greed():
+    """Consulta índice de miedo/avaricia (API alternativa: alternative.me)."""
     url = "https://api.alternative.me/fng/"
     r = requests.get(url)
     data = r.json()
@@ -64,44 +61,13 @@ def send_telegram(message):
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     requests.post(url, data=payload)
 
-# ==============================
-# TOP-UP RULE
-# ==============================
-def check_topup_rule(df, symbol):
-    now = df.iloc[-1]["price"]
-
-    # Precio 48h atrás
-    past_48h = df[df["time"] > datetime.now() - timedelta(hours=48)]
-    if not past_48h.empty:
-        drop_48h = (now - past_48h.iloc[0]["price"]) / past_48h.iloc[0]["price"] * 100
-        if drop_48h <= -10:
-            return f"⚠️ Top-Up Rule: {symbol.upper()} ha caído {drop_48h:.2f}% en 48h → sugerido *€20* (70% BTC / 30% ETH)"
-
-    # Precio 72h atrás
-    past_72h = df[df["time"] > datetime.now() - timedelta(hours=72)]
-    if not past_72h.empty:
-        drop_72h = (now - past_72h.iloc[0]["price"]) / past_72h.iloc[0]["price"] * 100
-        if drop_72h <= -15:
-            return f"⚠️ Top-Up Rule: {symbol.upper()} ha caído {drop_72h:.2f}% en 72h → sugerido *€30* (70% BTC / 30% ETH)"
-
-    return None
-
-# ==============================
-# GENERAR INFORME
-# ==============================
 def generate_report():
     tz = pytz.timezone("Europe/Madrid")
     now = datetime.now(tz).strftime("%d-%m-%Y %H:%M:%S")
-    portfolio = load_portfolio()
+    msg = f"📊 *Alerta Cripto* — {now}\n\n"
 
-    msg = f"📊 *Alerta Cripto & Cartera* — {now}\n\n"
-    total_value = 0
-    total_cost = 0
-    details = ""
-    topup_alerts = []
-
-    for coin in portfolio:
-        df = get_price_history(coin, days=7)
+    for coin, symbol in SYMBOLS.items():
+        df = get_price_history(coin, days=5)
         df = calc_indicators(df)
         latest = df.iloc[-1]
 
@@ -114,102 +80,35 @@ def generate_report():
         ema20 = round(latest["EMA20"], 2)
         ema50 = round(latest["EMA50"], 2)
 
-        # Valor en cartera
-        amount = portfolio[coin]["amount"]
-        cost = portfolio[coin]["cost"]
-        value = amount * price
-        total_value += value
-        total_cost += cost
-
-        details += f"🔹 *{portfolio[coin]['symbol']}*\n"
-        details += f"💰 Precio: €{price:,.2f}\n"
-        details += f"📦 En cartera: {amount} = €{value:,.2f}\n"
-        details += f"⏳ Coste: €{cost:,.2f}\n"
-        details += f"📈 RSI: {rsi} | MACD: {macd} / Señal: {macd_signal}\n"
-        details += f"📉 SMA20={sma20}, SMA50={sma50}\n"
-        details += f"📉 EMA20={ema20}, EMA50={ema50}\n\n"
-
-        # Aplicar Top-Up Rule solo a BTC y ETH
-        if portfolio[coin]["symbol"] in ["BTC", "ETH"]:
-            rule = check_topup_rule(df, portfolio[coin]["symbol"])
-            if rule:
-                topup_alerts.append(rule)
-
-    # Rentabilidad total
-    profit = total_value - total_cost
-    profit_pct = (profit / total_cost) * 100 if total_cost > 0 else 0
+        msg += f"🔹 *{symbol}*\n"
+        msg += f"💰 Precio: €{price:,.2f}\n"
+        msg += f"📈 RSI: {rsi}\n"
+        msg += f"📊 MACD: {macd} | Señal: {macd_signal}\n"
+        msg += f"📉 SMA20={sma20}, SMA50={sma50}\n"
+        msg += f"📉 EMA20={ema20}, EMA50={ema50}\n\n"
 
     fear_greed = get_fear_greed()
-
-    msg += details
-    msg += f"💼 *Cartera total*: €{total_value:,.2f}\n"
-    msg += f"📊 Rentabilidad acumulada: €{profit:,.2f} ({profit_pct:.2f}%)\n\n"
-    msg += f"😨 Índice Miedo/Avaricia: *{fear_greed}*\n\n"
-
-    if topup_alerts:
-        msg += "🔔 *Top-Up Alerts:*\n" + "\n".join(topup_alerts)
+    msg += f"😨 Índice Miedo/Avaricia: *{fear_greed}*\n"
 
     send_telegram(msg)
 
 # ==============================
-# SCHEDULER
+# SCHEDULER (ejecuciones fijas)
 # ==============================
+
 schedule.every().day.at("09:00").do(generate_report)
 schedule.every().day.at("13:00").do(generate_report)
 schedule.every().day.at("17:00").do(generate_report)
 schedule.every().day.at("21:00").do(generate_report)
 
-print("✅ Bot corriendo… enviará alertas con cartera, técnicos y top-up rule.")
+print("✅ Bot corriendo… enviará alertas a las 09:00, 13:00, 17:00 y 21:00 CEST")
 
 while True:
     schedule.run_pending()
     time.sleep(30)
 
-def check_topup_rule(df, symbol, price_now, portfolio):
-    alerts = []
-    now = datetime.now()
 
-    # Precio 48h atrás
-    past_48h = df[df["time"] > datetime.now() - timedelta(hours=48)]
-    if not past_48h.empty:
-        drop_48h = (price_now - past_48h.iloc[0]["price"]) / past_48h.iloc[0]["price"] * 100
-        if drop_48h <= -10:
-            alerts.append(("€20", 20))
 
-    # Precio 72h atrás
-    past_72h = df[df["time"] > datetime.now() - timedelta(hours=72)]
-    if not past_72h.empty:
-        drop_72h = (price_now - past_72h.iloc[0]["price"]) / past_72h.iloc[0]["price"] * 100
-        if drop_72h <= -15:
-            alerts.append(("€30", 30))
-
-    # Generar mensaje de rebalanceo
-    if alerts:
-        messages = []
-        for label, amount in alerts:
-            btc_part = amount * 0.7
-            eth_part = amount * 0.3
-
-            # Calcular cuántos tokens compra
-            btc_price = get_price_history("bitcoin", 1).iloc[-1]["price"]
-            eth_price = get_price_history("ethereum", 1).iloc[-1]["price"]
-
-            btc_amount = btc_part / btc_price
-            eth_amount = eth_part / eth_price
-
-            # Proyección de nueva cartera
-            btc_new_total = portfolio["bitcoin"]["amount"] + btc_amount
-            eth_new_total = portfolio["ethereum"]["amount"] + eth_amount
-
-            messages.append(
-                f"⚠️ *Top-Up Rule activada*: {symbol.upper()}\n"
-                f"Caída detectada → sugerido *{label}* (70% BTC / 30% ETH)\n\n"
-                f"📌 Asignación:\n"
-                f"   - BTC: €{btc_part:.2f} → +{btc_amount:.6f} BTC (nuevo total: {btc_new_total:.6f})\n"
-                f"   - ETH: €{eth_part:.2f} → +{eth_amount:.6f} ETH (nuevo total: {eth_new_total:.6f})\n"
-            )
-
-        return "\n".join(messages)
-
-    return None
+TELEGRAM_TOKEN = "8007309562:AAHoY6yJgFNbr0-KAjtlcx911H-xauejlVUE"
+CHAT_ID = "MATEOAF_BOT"
 
